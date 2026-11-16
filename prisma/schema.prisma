@@ -1,0 +1,631 @@
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  CONTENT_CREATOR
+  DISTRIBUTION_PARTNER
+  SUPER_ADMIN
+  OPERATIONS_ADMIN
+  CAMPAIGN_MANAGER
+  VIDEO_EDITOR
+  QUALITY_REVIEWER
+  FINANCE_MANAGER
+  SUPPORT_AGENT
+}
+
+enum UserStatus {
+  ACTIVE
+  PENDING_VERIFICATION
+  SUSPENDED
+}
+
+enum CampaignStatus {
+  DRAFT
+  BRIEF_SUBMITTED
+  RIGHTS_REVIEW
+  AWAITING_PAYMENT
+  PAID
+  EDITING_QUEUED
+  EDITING_IN_PROGRESS
+  QUALITY_REVIEW
+  CREATOR_REVIEW
+  READY_FOR_DISTRIBUTION
+  DISTRIBUTION_IN_PROGRESS
+  PERFORMANCE_TRACKING
+  COMPLETED
+  CANCELLED
+  DISPUTED
+  REFUNDED
+}
+
+enum EditStatus {
+  REQUESTED
+  EDITING
+  DRAFT_SUBMITTED
+  REVISION_REQUESTED
+  QUALITY_REVIEW
+  CREATOR_REVIEW
+  APPROVED_FINAL
+  AVAILABLE_FOR_MATCHING
+  ASSIGNMENT_PENDING
+  ASSIGNED_LOCKED
+  PUBLISHED_PENDING_VERIFICATION
+  PUBLISHED_TRACKING
+  COMPLETED
+  VOIDED_BEFORE_ASSIGNMENT
+  REJECTED
+}
+
+enum AssignmentStatus {
+  PROPOSED
+  CREATOR_APPROVAL_PENDING
+  PARTNER_INVITED
+  PARTNER_ACCEPTED
+  PARTNER_DECLINED
+  ASSET_ACCESS_GRANTED
+  PUBLISHING_DUE
+  SUBMITTED_FOR_VERIFICATION
+  VERIFICATION_PENDING
+  VERIFIED_PUBLISHED
+  TRACKING
+  COMPLETED
+  CANCELLED_BEFORE_COMMIT
+  DISPUTED
+  FAILED
+}
+
+enum SocialPlatform {
+  YOUTUBE
+  INSTAGRAM
+  TIKTOK
+  OTHER
+}
+
+enum VerificationLevel {
+  UNVERIFIED
+  PENDING_REVIEW
+  API_VERIFIED
+  MANUAL_VERIFIED
+}
+
+model User {
+  id              String      @id @default(cuid())
+  email           String      @unique
+  name            String
+  passwordHash    String
+  role            String      @default("CONTENT_CREATOR") // Role enum string
+  status          String      @default("ACTIVE")          // UserStatus
+  phone           String?
+  avatarUrl       String?
+  mfaEnabled      Boolean     @default(false)
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  creatorProfile  CreatorProfile?
+  partnerProfile  PartnerProfile?
+  orgMemberships  OrganisationMember[]
+  campaigns       Campaign[]
+  editingTasks    EditingTask[]        @relation("AssignedEditor")
+  approvedEdits   FinalEdit[]          @relation("FinalEditApprover")
+  auditLogs       AuditLog[]
+  notifications   Notification[]
+  messagesSent    Message[]
+  quotes          Quote[]
+  invoices        Invoice[]
+  disputesRaised  Dispute[]
+}
+
+model Organisation {
+  id           String               @id @default(cuid())
+  name         String
+  slug         String               @unique
+  billingEmail String
+  taxId        String?
+  country      String               @default("US")
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
+
+  members      OrganisationMember[]
+  campaigns    Campaign[]
+  invoices     Invoice[]
+}
+
+model OrganisationMember {
+  id             String       @id @default(cuid())
+  organisationId String
+  userId         String
+  orgRole        String       @default("MEMBER") // OWNER, ADMIN, MEMBER
+  createdAt      DateTime     @default(now())
+
+  organisation   Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([organisationId, userId])
+}
+
+model CreatorProfile {
+  id          String   @id @default(cuid())
+  userId      String   @unique
+  brandName   String
+  website     String?
+  bio         String?
+  targetNiche String?
+  createdAt   DateTime @default(now())
+
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model PartnerProfile {
+  id            String         @id @default(cuid())
+  userId        String         @unique
+  businessName  String
+  country       String         @default("US")
+  taxStatus     String         @default("NOT_COLLECTED")
+  payoutMethod  String         @default("STRIPE_CONNECTED")
+  payoutDetails String?
+  isVerified    Boolean        @default(false)
+  rating        Float          @default(5.0)
+  totalEarnings Int            @default(0) // cents
+  createdAt     DateTime       @default(now())
+
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  socialPages   SocialPage[]
+  payouts       PartnerPayout[]
+}
+
+model SocialPage {
+  id                  String             @id @default(cuid())
+  partnerId           String
+  platform            String             // YOUTUBE, INSTAGRAM, TIKTOK
+  handle              String
+  pageName            String
+  profileUrl          String
+  niche               String
+  primaryLanguage     String             @default("English")
+  audienceMarkets     String             @default("US, UK, CA")
+  placementPriceCents Int                @default(15000) // minor units ($150.00)
+  verificationLevel   String             @default("PENDING_REVIEW") // UNVERIFIED, PENDING_REVIEW, API_VERIFIED, MANUAL_VERIFIED
+  status              String             @default("ACTIVE")         // ACTIVE, PAUSED, REJECTED
+  
+  // Strict non-fake metric provenance fields:
+  medianViewsSample   Int                @default(10)
+  medianViews         Int                @default(25000)
+  postingFrequency    Float              @default(4.5) // posts per week
+  engagementRate      Float              @default(3.8) // percentage
+  completionRate      Float              @default(98.0) // historical delivery %
+  cancellationRate    Float              @default(1.0)
+  disputeRate         Float              @default(0.0)
+  metricProvenance    String             @default("PARTNER_SUBMITTED") // PLATFORM_API, PUBLIC_OBSERVED, PARTNER_SUBMITTED, ESTIMATED
+  metricLastSync      DateTime           @default(now())
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+
+  partner             PartnerProfile     @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+  connections         SocialConnection[]
+  verifications       PageVerification[]
+  snapshots           AnalyticsSnapshot[]
+  assignments         DistributionAssignment[]
+  recommendations     PageRecommendation[]
+  invitations         PartnerInvitation[]
+
+  @@unique([platform, handle])
+}
+
+model SocialConnection {
+  id              String      @id @default(cuid())
+  socialPageId    String
+  provider        String      // youtube, instagram, tiktok
+  accountId       String?
+  scopes          String      // "read:user,read:analytics"
+  tokenExpiry     DateTime?
+  status          String      @default("PENDING_AUTHORISATION") // CONNECTED, PENDING_AUTHORISATION, PERMISSION_LIMITED, EXPIRED, REVOKED, ERROR
+  lastSyncAt      DateTime?
+  errorMessage    String?
+  createdAt       DateTime    @default(now())
+
+  socialPage      SocialPage  @relation(fields: [socialPageId], references: [id], onDelete: Cascade)
+}
+
+model PageVerification {
+  id               String      @id @default(cuid())
+  socialPageId     String
+  verificationType String      // OAUTH_TOKEN, PROFILE_BIO_CODE, SCREENSHOT_REVIEW
+  verificationCode String?
+  evidenceUrl      String?
+  status           String      @default("PENDING") // PENDING, APPROVED, REJECTED
+  reviewerNotes    String?
+  reviewedAt       DateTime?
+  createdAt        DateTime    @default(now())
+
+  socialPage       SocialPage  @relation(fields: [socialPageId], references: [id], onDelete: Cascade)
+}
+
+model AnalyticsSnapshot {
+  id                String      @id @default(cuid())
+  socialPageId      String
+  metricDate        DateTime    @default(now())
+  source            String      // PLATFORM_API, PUBLIC_OBSERVED, PARTNER_SUBMITTED, SCREENSHOT_REVIEWED, ESTIMATED
+  verificationLabel String
+  sampleSize        Int
+  medianViews       Int
+  engagementRate    Float
+  rawDataJson       String?     // raw JSON response for audit
+  createdAt         DateTime    @default(now())
+
+  socialPage        SocialPage  @relation(fields: [socialPageId], references: [id], onDelete: Cascade)
+}
+
+model Campaign {
+  id                   String            @id @default(cuid())
+  creatorId            String
+  organisationId       String?
+  title                String
+  objective            String            // BRAND_AWARENESS, ENGAGEMENT, CONVERSIONS, FOLLOWER_GROWTH
+  contentNiche         String
+  targetAudience       String
+  targetPlatforms      String            // "YOUTUBE,INSTAGRAM,TIKTOK"
+  desiredEditsCount    Int               @default(3)
+  publishingWindowStart DateTime?
+  publishingWindowEnd   DateTime?
+  editingBudgetCents   Int               @default(30000)  // $300.00
+  placementBudgetCents Int               @default(45000)  // $450.00
+  totalBudgetCents     Int               @default(75000)  // $750.00
+  status               String            @default("DRAFT") // CampaignStatus
+  createdAt            DateTime          @default(now())
+  updatedAt            DateTime          @updatedAt
+
+  creator              User              @relation(fields: [creatorId], references: [id])
+  organisation         Organisation?     @relation(fields: [organisationId], references: [id])
+  rights               CampaignRights?
+  sourceAssets         SourceAsset[]
+  editingTasks         EditingTask[]
+  finalEdits           FinalEdit[]
+  assignments          DistributionAssignment[]
+  quotes               Quote[]
+  payments             Payment[]
+  invoices             Invoice[]
+  disputes             Dispute[]
+  messages             Message[]
+}
+
+model CampaignRights {
+  id                     String    @id @default(cuid())
+  campaignId             String    @unique
+  ownsSourceContent      Boolean   @default(false)
+  hasThirdPartyLicenses  Boolean   @default(false)
+  permittedTerritories   String    @default("Worldwide")
+  permittedPlatforms     String    @default("YouTube Shorts, Instagram Reels, TikTok")
+  licenceDurationMonths  Int       @default(12)
+  rightsNotes            String?
+  declarationAcceptedAt  DateTime  @default(now())
+  acceptedByUserId       String
+
+  campaign               Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+}
+
+model SourceAsset {
+  id              String         @id @default(cuid())
+  campaignId      String
+  fileName        String
+  fileSizeBytes   BigInt
+  durationSeconds Int
+  format          String         @default("mp4")
+  storageKey      String
+  previewUrl      String?
+  checksumSha256  String?
+  uploadStatus    String         @default("UPLOADED") // PENDING, UPLOADED, PROCESSED, ERROR
+  createdAt       DateTime       @default(now())
+
+  campaign        Campaign       @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  editingTasks    EditingTask[]
+}
+
+model EditingTask {
+  id              String         @id @default(cuid())
+  campaignId      String
+  sourceAssetId   String
+  assignedEditorId String?
+  status          String         @default("QUEUED") // QUEUED, IN_PROGRESS, DRAFT_READY, REVISION_NEEDED, APPROVED_BY_QA
+  targetClipsCount Int           @default(3)
+  deadline        DateTime?
+  internalNotes   String?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  campaign        Campaign       @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  sourceAsset     SourceAsset    @relation(fields: [sourceAssetId], references: [id], onDelete: Cascade)
+  editor          User?          @relation("AssignedEditor", fields: [assignedEditorId], references: [id])
+  editVersions    EditVersion[]
+}
+
+model EditVersion {
+  id               String         @id @default(cuid())
+  editingTaskId    String
+  versionNumber    Int            @default(1)
+  title            String
+  draftUrl         String
+  storageKey       String
+  hookDescription  String
+  captionText      String
+  aspectRatio      String         @default("9:16")
+  durationSeconds  Int            @default(45)
+  editorNotes      String?
+  qaNotes          String?
+  creatorFeedback  String?
+  status           String         @default("QA_PENDING") // DRAFT, QA_PENDING, QA_REJECTED, QA_APPROVED, CREATOR_REVISION_REQUESTED, APPROVED_FINAL
+  createdAt        DateTime       @default(now())
+
+  editingTask      EditingTask    @relation(fields: [editingTaskId], references: [id], onDelete: Cascade)
+  finalEdit        FinalEdit?
+}
+
+model FinalEdit {
+  id                  String                  @id // Format: EDIT-XXXXX
+  editVersionId       String                  @unique
+  campaignId          String
+  checksumSha256      String
+  perceptualHash      String?
+  durationSeconds     Int
+  aspectRatio         String                  @default("9:16")
+  storageKey          String
+  approvedFileUrl     String
+  approvedAt          DateTime                @default(now())
+  approvedByUserId    String
+  rightsSnapshotJson  String                  // Immutable JSON snapshot of cleared rights
+  status              String                  @default("AVAILABLE_FOR_MATCHING") // EditStatus
+  createdAt           DateTime                @default(now())
+
+  editVersion         EditVersion             @relation(fields: [editVersionId], references: [id], onDelete: Restrict)
+  campaign            Campaign                @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  approver            User                    @relation("FinalEditApprover", fields: [approvedByUserId], references: [id])
+  recommendations     PageRecommendation[]
+  assignment          DistributionAssignment? // 1-TO-1 STRICT RELATION
+}
+
+// NON-NEGOTIABLE RULE: ONE_EDIT_ONE_PAGE
+// distribution_assignments.finalEditId is marked UNIQUE
+// An Edit ID maps to at most one page assignment for its entire lifecycle.
+model DistributionAssignment {
+  id                   String              @id @default(cuid())
+  finalEditId          String              @unique // STRICT 1-to-1 DB ENFORCEMENT
+  socialPageId         String
+  campaignId           String
+  partnerId            String
+  agreedPriceCents     Int
+  status               String              @default("PROPOSED") // AssignmentStatus
+  publishingDeadline   DateTime?
+  creatorApprovedAt    DateTime?
+  partnerAcceptedAt    DateTime?
+  assignedAt           DateTime            @default(now())
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
+
+  finalEdit            FinalEdit           @relation(fields: [finalEditId], references: [id], onDelete: Restrict)
+  socialPage           SocialPage          @relation(fields: [socialPageId], references: [id], onDelete: Restrict)
+  campaign             Campaign            @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  invitation           PartnerInvitation?
+  publishedPost        PublishedPost?
+  payouts              PartnerPayout[]
+}
+
+model PartnerInvitation {
+  id             String                 @id @default(cuid())
+  assignmentId   String                 @unique
+  socialPageId   String
+  partnerId      String
+  proposedFeeCents Int
+  expiresAt      DateTime
+  status         String                 @default("PENDING") // PENDING, ACCEPTED, DECLINED, EXPIRED
+  responseNotes  String?
+  createdAt      DateTime               @default(now())
+
+  assignment     DistributionAssignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  socialPage     SocialPage             @relation(fields: [socialPageId], references: [id], onDelete: Cascade)
+}
+
+model PublishedPost {
+  id                 String                 @id @default(cuid())
+  assignmentId       String                 @unique
+  publicPostUrl      String
+  platformPostId     String?
+  publishedAt        DateTime
+  evidenceUrl        String?
+  submissionNotes    String?
+  verificationStatus String                 @default("PENDING_VERIFICATION") // PENDING_VERIFICATION, API_VERIFIED, MANUAL_REVIEW_APPROVED, REJECTED
+  verifiedByUserId   String?
+  verifiedAt         DateTime?
+  verificationNotes  String?
+  createdAt          DateTime               @default(now())
+
+  assignment         DistributionAssignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  analytics          PostAnalytics[]
+}
+
+model PostAnalytics {
+  id                    String         @id @default(cuid())
+  publishedPostId       String
+  snapshotAt            DateTime       @default(now())
+  viewsCount            Int            @default(0)
+  likesCount            Int            @default(0)
+  commentsCount         Int            @default(0)
+  sharesCount           Int            @default(0)
+  costPerThousandViews  Float?
+  provenance            String         @default("PARTNER_SUBMITTED") // PLATFORM_API, PUBLIC_OBSERVED, PARTNER_SUBMITTED
+  attributionCaveat     String         @default("Observed post performance; not guaranteed incremental reach.")
+  rawJson               String?
+  createdAt             DateTime       @default(now())
+
+  post                  PublishedPost  @relation(fields: [publishedPostId], references: [id], onDelete: Cascade)
+}
+
+model PageRecommendation {
+  id                 String      @id @default(cuid())
+  finalEditId        String
+  socialPageId       String
+  compositeScore     Float       // 0 - 100
+  nicheScore         Float       // out of 25
+  viewsScore         Float       // out of 20
+  audienceScore      Float       // out of 15
+  priceScore         Float       // out of 15
+  activityScore      Float       // out of 10
+  deliveryScore      Float       // out of 10
+  verificationScore  Float       // out of 5
+  explanationText    String
+  missingDataCaveat  String?
+  exclusionReason    String?
+  modelVersion       String      @default("v1.0-deterministic")
+  createdAt          DateTime    @default(now())
+
+  finalEdit          FinalEdit   @relation(fields: [finalEditId], references: [id], onDelete: Cascade)
+  socialPage         SocialPage  @relation(fields: [socialPageId], references: [id], onDelete: Cascade)
+
+  @@unique([finalEditId, socialPageId])
+}
+
+model Quote {
+  id                    String    @id @default(cuid())
+  campaignId            String
+  editingSubtotalCents  Int
+  placementSubtotalCents Int
+  platformFeeCents      Int
+  taxCents              Int
+  totalDueCents         Int
+  currency              String    @default("USD")
+  status                String    @default("ACCEPTED") // DRAFT, SENT, ACCEPTED, EXPIRED
+  acceptedAt            DateTime?
+  userId                String
+  createdAt             DateTime  @default(now())
+
+  campaign              Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  user                  User      @relation(fields: [userId], references: [id])
+  payments              Payment[]
+}
+
+model Payment {
+  id                String       @id @default(cuid())
+  campaignId        String
+  quoteId           String?
+  amountCents       Int
+  currency          String       @default("USD")
+  provider          String       @default("STRIPE_MARKETPLACE")
+  providerPaymentId String?
+  idempotencyKey    String       @unique
+  status            String       @default("SUCCEEDED") // PENDING, SUCCEEDED, FAILED, REFUNDED
+  paidAt            DateTime?
+  createdAt         DateTime     @default(now())
+
+  campaign          Campaign     @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  quote             Quote?       @relation(fields: [quoteId], references: [id])
+}
+
+model LedgerEntry {
+  id                  String    @id @default(cuid())
+  transactionType     String    // CAMPAIGN_CHARGE, PLATFORM_FEE, PARTNER_PAYABLE, PAYOUT_SETTLEMENT, REFUND
+  accountId           String
+  relatedCampaignId   String?
+  relatedAssignmentId String?
+  debitCents          Int       @default(0)
+  creditCents         Int       @default(0)
+  balanceCents        Int       @default(0)
+  notes               String?
+  createdAt           DateTime  @default(now())
+}
+
+model Invoice {
+  id             String        @id @default(cuid())
+  invoiceNumber  String        @unique
+  userId         String
+  orgId          String?
+  campaignId     String
+  amountCents    Int
+  taxCents       Int
+  status         String        @default("PAID") // DRAFT, ISSUED, PAID, VOID
+  fileUrl        String?
+  dueDate        DateTime?
+  paidAt         DateTime?
+  createdAt      DateTime      @default(now())
+
+  user           User          @relation(fields: [userId], references: [id])
+  organisation   Organisation? @relation(fields: [orgId], references: [id])
+  campaign       Campaign      @relation(fields: [campaignId], references: [id])
+}
+
+model PartnerPayout {
+  id                String                 @id @default(cuid())
+  partnerId         String
+  assignmentId      String
+  amountCents       Int
+  status            String                 @default("PENDING_ELIGIBILITY") // PENDING_ELIGIBILITY, ELIGIBLE, IN_BATCH, PAID, DISPUTE_HOLD, FAILED
+  providerPayoutId  String?
+  batchId           String?
+  paidAt            DateTime?
+  createdAt         DateTime               @default(now())
+
+  partner           PartnerProfile         @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+  assignment        DistributionAssignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+}
+
+model Dispute {
+  id             String    @id @default(cuid())
+  campaignId     String
+  assignmentId   String?
+  raisedByUserId String
+  reasonCategory String    // COPYRIGHT, NON_PUBLICATION, CREATIVE_MISMATCH, PAYMENT, OTHER
+  status         String    @default("OPEN") // OPEN, UNDER_REVIEW, RESOLVED_REFUND, RESOLVED_UPHELD, REJECTED
+  description    String
+  resolutionNotes String?
+  resolvedAt     DateTime?
+  resolvedByUserId String?
+  createdAt      DateTime  @default(now())
+
+  campaign       Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  raisedByUser   User      @relation(fields: [raisedByUserId], references: [id])
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  title     String
+  message   String
+  link      String?
+  type      String   @default("CAMPAIGN") // CAMPAIGN, EDITING, ASSIGNMENT, PAYMENT, DISPUTE
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Message {
+  id            String    @id @default(cuid())
+  campaignId    String
+  senderUserId  String
+  recipientRole String    @default("TEAM")
+  messageText   String
+  attachmentUrl String?
+  createdAt     DateTime  @default(now())
+
+  campaign      Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  senderUser    User      @relation(fields: [senderUserId], references: [id])
+}
+
+model AuditLog {
+  id               String    @id @default(cuid())
+  actorUserId      String?
+  actorRole        String
+  action           String    // e.g. "APPROVE_FINAL_EDIT", "COMMIT_ASSIGNMENT", "REJECT_SECOND_ASSIGNMENT", "PROCESS_PAYMENT"
+  entityType       String    // "final_edit", "distribution_assignment", "payment", etc.
+  entityId         String
+  previousStateJson String?
+  newStateJson     String?
+  ipAddress        String    @default("127.0.0.1")
+  userAgent        String    @default("Internal Service")
+  createdAt        DateTime  @default(now())
+
+  actor            User?     @relation(fields: [actorUserId], references: [id])
+}
